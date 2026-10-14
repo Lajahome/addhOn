@@ -164,6 +164,9 @@ _TO_REDACT = frozenset(
         "pk",
         "sk",
         "sk_secondary",
+        # `attributes.activity` names the hOn account that started the cycle when the
+        # official app did (issue #112: five published dumps carried it in clear).
+        "principaluserid",
     }
 )
 
@@ -1351,8 +1354,9 @@ def _command_history_block(appliance) -> dict:
     two of the reporter's dumps. The engine already downloads the `/history` list at
     every catalog load to recover the last-used programme; this prints it.
 
-    The list is read at catalog load (setup or reload), ten seconds after the cloud
-    accepts a startProgram or stopProgram, and AGAIN when the dump is requested
+    The list is read at catalog load (setup or reload), when a new cycle of a washer,
+    washer-dryer, dryer or dishwasher shows up in the context, and AGAIN when the dump
+    is requested
     (`refresh_command_history`, issues #112/#115: a setup-time list was 42 h old in a
     dump and missed the two starts it was opened to show). `at` is HA's UTC instant of
     the last successful read, `refresh` the outcome of the last re-read ("ok",
@@ -1432,7 +1436,31 @@ _LAST_COMMAND_CAVEAT = (
 )
 
 
-def _last_command_delivery(attributes: Mapping) -> dict:
+def _history_executed(history: object, accepted: datetime | None) -> datetime | None:
+    """`timestampExecuted` of the `/history` row accepted at `accepted`, if it has one.
+
+    The row is the same command as the slot -- the cloud stamps acceptance once -- but
+    read later: at catalog load or when the dump was requested, never in the poll that
+    follows our own send.
+    """
+    if accepted is None or not isinstance(history, Mapping):
+        return None
+    try:
+        entries = history.get("entries")
+        if not isinstance(entries, list):
+            return None
+        for entry in entries:
+            if not isinstance(entry, Mapping):
+                continue
+            moment = _as_utc(_parse_cloud_moment(entry.get("timestampAccepted")), True)
+            if moment == accepted:
+                return _as_utc(_parse_cloud_moment(entry.get("timestampExecuted")), True)
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        _LOGGER.debug("Diagnostics debug: command history row unreadable", exc_info=True)
+    return None
+
+
+def _last_command_delivery(attributes: Mapping, history: object = None) -> dict:
     """Whether the last command the cloud accepted reached the appliance.
 
     Read off `attributes.commandHistory`, the shadow's one-slot echo, and only off
@@ -1444,12 +1472,21 @@ def _last_command_delivery(attributes: Mapping) -> dict:
 
     `delivered` for a gap inside `_DELIVERED_MIN_GAP_S`..`_DELIVERED_MAX_GAP_S`,
     `not_delivered` for a gap of exactly zero, `unknown` for everything else. A
-    NEGATIVE gap is not a delivery problem: a later command moved only
-    `timestampAccepted` (issue #106 beta2, -6408.9 s; three `/history` rows of
-    issue #112), so the two instants belong to two different commands.
+    NEGATIVE gap is not a delivery problem, and has two causes. A later command
+    moved only `timestampAccepted` (issue #106 beta2, -6408.9 s; three `/history`
+    rows of issue #112), so the two instants belong to two different commands. Or
+    the slot was read between acceptance and execution and never again: the poll
+    that follows our own send lands inside the 0.6-2.6 s delivery, and a running
+    cycle is then followed over MQTT only (issue #99 beta11, -2147912.9 s, the
+    executed instant of a start 25 days older).
+
+    `history` is the `command_history` section. When one of its rows was accepted at
+    the slot's instant and carries its own `timestampExecuted`, the two instants
+    come from that row, the later read of the same command; `source` says which
+    was used.
 
     The instants are parsed and re-rendered, never echoed, as in `_conn_event_row`.
-    The same five keys in every state, so two dumps of one issue stay diffable.
+    The same six keys in every state, so two dumps of one issue stay diffable.
     """
     accepted = executed = None
     try:
@@ -1462,6 +1499,11 @@ def _last_command_delivery(attributes: Mapping) -> dict:
     except Exception:  # noqa: BLE001 - a dump must degrade, never raise
         _LOGGER.debug("Diagnostics debug: commandHistory unreadable", exc_info=True)
         accepted = executed = None
+    source = "slot"
+    row_executed = _history_executed(history, accepted)
+    if row_executed is not None:
+        executed = row_executed
+        source = "history"
     accepted_text = _stamp_text(accepted)
     executed_text = _stamp_text(executed)
     gap = verdict = None
@@ -1485,6 +1527,7 @@ def _last_command_delivery(attributes: Mapping) -> dict:
         "executed": executed_text,
         "gap_s": gap,
         "verdict": verdict or "unknown",
+        "source": source,
         "caveat": _LAST_COMMAND_CAVEAT,
     }
 
@@ -4262,12 +4305,13 @@ def _appliance_block(
         **({"opt_compatibility": opt_compatibility} if opt_compatibility else {}),
         # Directly above `command_history`, and read off the same `attributes` mapping
         # printed two keys below: the verdict on the slot's instants, with the warning
-        # that the slot's body may be an older command.
+        # that the slot's body may be an older command. The `/history` row of the
+        # same command replaces them when the slot was read before the execution.
         # The commands payload's own census, beside the catalog's options above: each
         # top-level key and whether it became a command, extra data or nothing at all.
         "command_payload": command_payload,
         **({"command_payload_truncated": True} if command_payload_truncated else {}),
-        "last_command_delivery": _last_command_delivery(attributes),
+        "last_command_delivery": _last_command_delivery(attributes, command_history),
         # Above `attributes`, whose `commandHistory` is the single-slot echo of the same
         # data: the list says what was sent before the slot was overwritten or nulled.
         "command_history": command_history,

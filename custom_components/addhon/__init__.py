@@ -6,6 +6,7 @@ import logging
 import re
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
+from time import monotonic
 from typing import NoReturn
 
 from homeassistant.config_entries import ConfigEntry
@@ -935,6 +936,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.config_entries.async_update_entry(entry, data=migrated)
 
     from .command_catalog_store import CommandCatalogStore
+    from .program_options import forget_choices_after_followed_starts
 
     catalog_store = CommandCatalogStore(hass, entry.entry_id)
     command_catalog_cache = await catalog_store.async_load()
@@ -967,11 +969,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # (and the 2FA prompt). Single helper, change-guarded (see _persist_refresh_token).
     _persist_refresh_token(hass, entry, hon_client)
 
+    # The coordinator built below, for the poll to reach the choices parked on it. A
+    # box rather than the name itself: the poll must work before the name is bound.
+    coordinator_box: list = []
+
     async def async_update_data() -> dict:
         """Fetch the updated data from all the hOn devices."""
         try:
             _LOGGER.debug("Coordinator debug: starting hOn data update")
+            poll_started = monotonic()
             data = await hon_client.async_get_appliances_data()
+            # Issue #112: a start made elsewhere and followed by the engine replaces
+            # the programme and options chosen in HA and not started -- those chosen
+            # before this poll began (PR #127 review, S9).
+            if coordinator_box:
+                forget_choices_after_followed_starts(
+                    coordinator_box[0], data, poll_started=poll_started
+                )
             await catalog_store.async_sync(hon_client)
             # A runtime token refresh / background re-auth may have rotated the refresh
             # token during this fetch; persist it (only on a real change) so it survives a
@@ -1029,6 +1043,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             update_method=async_update_data,
             update_interval=timedelta(seconds=SCAN_INTERVAL),
         )
+        coordinator_box.append(coordinator)
 
         # First fetch
         _LOGGER.debug("Setup debug: first coordinator refresh at startup")

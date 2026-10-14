@@ -25,6 +25,7 @@ decoupled from the engine, as the whole native layer is.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -58,6 +59,78 @@ def _redacted_body(data: dict[str, Any]) -> Any:
     if isinstance(attributes, dict) and "prStr" in attributes:
         attributes["prStr"] = "***"
     return redacted
+
+
+# A cloud error is the vendor's free text: bounded, so a stack dump cannot flood a log
+# line users paste into public issues.
+_CLOUD_ERROR_MAX_CHARS = 300
+# How much of it is scanned at all. Masking only shortens the text, so this many
+# characters always cover the 300 printed; the cap keeps a huge answer from costing
+# the client loop anything (PR #127 review).
+_CLOUD_ERROR_SCAN_CHARS = 1000
+
+# What in that free text could name someone, masked before the ERROR line (always
+# emitted, unlike the DEBUG payload line). Emails and UUIDs by shape; then any run of
+# 15+ token characters mixing letters and digits: a JWT segment, a Salesforce or
+# cognito id, a hex digest, a serial. A plain word ("ConditionalCheckFailedException")
+# has no digit and a timestamp breaks at ':' well short of 15, so both stay readable.
+# Each pattern may only START where its run of characters starts (the lookbehinds):
+# restarting inside a long run made the email pattern quadratic (PR #127 review,
+# 32 KB without "@" took 2.8 s).
+_EMAIL_RE = re.compile(r"(?<![\w.+-])[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+_UUID_RE = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+_TOKEN_RE = re.compile(r"(?<![\w+/=-])(?=[\w+/=-]*\d)(?=[\w+/=-]*[A-Za-z])[\w+/=-]{15,}")
+# Every character either pattern above can match: what the scan bound cut through.
+_MASKABLE_PUNCTUATION = frozenset("_.+/=@-")
+
+
+def _drop_cut_run(text: str) -> str:
+    """`text` without the run the scan bound cut through, which no pattern can judge.
+
+    Half a token can be shorter than `_TOKEN_RE`'s 15 characters, and masking what
+    precedes it can slide it into the printed part.
+    """
+    end = len(text)
+    while end and (text[end - 1].isalnum() or text[end - 1] in _MASKABLE_PUNCTUATION):
+        end -= 1
+    return text[:end]
+
+
+def _scrub_cloud_text(text: str) -> str:
+    """Cloud-chosen text as an always-emitted log line may show it.
+
+    Bounded twice: at most `_CLOUD_ERROR_SCAN_CHARS` are scanned, the run the bound
+    cuts through dropped whole (`_drop_cut_run`), and at most
+    `_CLOUD_ERROR_MAX_CHARS` printed. A MAC is masked, as everywhere in the logs,
+    and so is anything shaped like an email, a UUID or a token (`_TOKEN_RE`).
+    Masking by shape is not a guarantee, which is why only the errorType goes
+    through here (see `_cloud_error`).
+    """
+    if len(text) > _CLOUD_ERROR_SCAN_CHARS:
+        text = _drop_cut_run(text[:_CLOUD_ERROR_SCAN_CHARS]) + "..."
+    text = redact_identity(text)
+    for pattern in (_EMAIL_RE, _UUID_RE, _TOKEN_RE):
+        text = pattern.sub("***", text)
+    if len(text) > _CLOUD_ERROR_MAX_CHARS:
+        text = text[: _CLOUD_ERROR_MAX_CHARS - 3] + "..."
+    return text
+
+
+def _cloud_error(payload: Any) -> str | None:
+    """The cloud's own name for a refused send, for the ERROR line; None without one.
+
+    Issue #126: Haier's command handler, an AWS Lambda, could not start and answered
+    `{"errorType": "Runtime.ImportModuleError", "errorMessage": "Unable to import
+    module 'handler': ..."}` with no resultCode. The errorType names the failure;
+    the errorMessage is the vendor's free text, which no shape-based scrubbing makes
+    safe for a line that is always emitted and pasted into public issues (PR #127
+    review), so it stays in the DEBUG payload line only.
+    """
+    if not isinstance(payload, dict) or payload.get("errorType") in (None, ""):
+        return None
+    return _scrub_cloud_text(str(payload["errorType"]))
 
 
 def _command_timestamp() -> str:
@@ -517,6 +590,13 @@ class HonApi:
         # schema declares it, fixed "0" and mandatory.
         if appliance.appliance_type not in ("WD", "TD") and "dryLevel" in parameters:
             parameters = {k: v for k, v in parameters.items() if k != "dryLevel"}
+        # `waterHard` never rides a program start: the app's send epic deletes it from
+        # every startProgram, whatever the type (apk2 decomp.txt:3477640-3477661), and
+        # sets it through setParameters from its water settings screen. The schema
+        # carries it in the start of a washer-dryer (issue #99) and of one dishwasher
+        # program (issue #106); no official-app body in diagnostics/ has it.
+        if (wire_command or command) == "startProgram" and "waterHard" in parameters:
+            parameters = {k: v for k, v in parameters.items() if k != "waterHard"}
         attributes: dict[str, Any] = {"channel": "mobileApp", "origin": "standardProgram"}
         if energy_label:
             attributes["energyLabel"] = "0" if energy_label is True else energy_label
@@ -551,9 +631,20 @@ class HonApi:
                 # command + resultCode at ERROR (no identity, always emitted), and the
                 # full REDACTED payload/response at DEBUG (gated) for troubleshooting.
                 result_code = payload.get("resultCode") if isinstance(payload, dict) else None
-                _LOGGER.error(
-                    "hOn send_command failed: command=%s resultCode=%s", command, result_code
-                )
+                cloud_error = _cloud_error(payload)
+                if cloud_error is None:
+                    _LOGGER.error(
+                        "hOn send_command failed: command=%s resultCode=%s",
+                        command,
+                        result_code,
+                    )
+                else:
+                    _LOGGER.error(
+                        "hOn send_command failed: command=%s resultCode=%s error=%s",
+                        command,
+                        result_code,
+                        cloud_error,
+                    )
                 _LOGGER.debug(
                     "hOn send_command failed payload (redacted)=%s response=%s",
                     _redacted_body(data),

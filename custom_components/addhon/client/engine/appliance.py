@@ -26,7 +26,7 @@ from ..catalog_repository import CommandCatalogRepository
 from ..helpers import parse_cloud_timestamp
 from .appliances import registry as _native_appliances
 from .attributes import HonAttribute
-from .command_loader import HonCommandLoader
+from .command_loader import HonCommandLoader, command_identity, start_identity
 from .commands import HonCommand
 from .exceptions import NoAuthenticationException
 from .parameter.base import HonParameter
@@ -34,12 +34,39 @@ from .parameter.base import HonParameter
 _LOGGER = logging.getLogger(__name__)
 
 
+# Marks an activity not looked at yet: the first poll after a load records the cycle
+# already running, which the `/history` just read describes (or cannot describe).
+_UNSEEN = object()
+
+
+def _programme_key(name: Any) -> Optional[str]:
+    """A programme name as a start row and an activity can both spell it.
+
+    `/history` and the `commandHistory` slot carry the catalog key
+    (`PROGRAMS.WM_WD.IOT_WASH_DARK`), an activity the bare name (`IOT_WASH_DARK`).
+    """
+    if not isinstance(name, str) or not name.strip():
+        return None
+    return name.strip().rsplit(".", 1)[-1].upper()
+
+
+def _newest_start(history: Any) -> dict[str, Any]:
+    """The newest `startProgram` body a `/history` list holds, {} without one."""
+    for entry in history if isinstance(history, list) else ():
+        command = entry.get("command") if isinstance(entry, dict) else None
+        if isinstance(command, dict) and command.get("commandName") == "startProgram":
+            return command
+    return {}
+
+
 class HonAppliance:
     _MINIMAL_UPDATE_INTERVAL = 5  # seconds
-    # How long after an accepted startProgram/stopProgram `/history` is read again: the
-    # execution lands 1-3 s after acceptance in every dump, and the GET must not race
-    # the cloud writing the row (decision of 2026-10-06, issues #112/#115).
-    _HISTORY_REFRESH_DELAY = 10.0
+    # Types whose start is followed when a cycle begins elsewhere (issue #112, decision
+    # D4 of 2026-10-06): the four the app's dashboard shows a running programme for.
+    _FOLLOWED_TYPES = frozenset({"WM", "WD", "TD", "DW"})
+    # Reads of `/history` for one new cycle, one per poll, before giving up (decision of
+    # 2026-10-06): a read that failed, or a list without the start just announced.
+    _FOLLOW_ATTEMPTS = 3
     # Realtime liveness is authoritative only while RECENT: a realtime message overrides
     # a STALE REST DISCONNECTED only if received within this wall-clock window. Without
     # the bound, a once-seen realtime time would keep a silently-dead appliance online
@@ -75,14 +102,30 @@ class HonAppliance:
         self._additional_data: dict[str, Any] = {}
         self._command_history: list[dict[str, Any]] = []
         # HA's UTC instant of the last SUCCESSFUL read of `/history` (None: never), and
-        # the outcome of the last re-read, for a dump or after a start/stop ("ok",
+        # the outcome of the last re-read, for a dump or for a new cycle ("ok",
         # "pending" while in flight, or the exception's class name). Issues #112/#115:
         # a list read only at setup was 42 h old in a dump and silently missed the
         # starts it was opened to show.
         self._command_history_at: Optional[datetime] = None
         self._command_history_refresh: Optional[str] = None
-        self._history_refresh_timer: Optional[asyncio.TimerHandle] = None
-        self._history_refresh_task: Optional[asyncio.Task] = None
+        # Following a cycle started elsewhere (issue #112, see `_follow_new_cycle`):
+        # the start the last recovery used, the last `commandHistory` start seen, the
+        # last activity seen, the start announced and still awaited, the programme an
+        # app start seen only through its activity is awaited by, the reads left, the
+        # programme of the start the slot announced and whose activity is still to
+        # come ("" when the slot named none), the read in flight, a list read and not
+        # applied yet, and how many starts were followed.
+        self._recovered_start: Optional[str] = None
+        self._seen_slot_start: Optional[str] = None
+        self._seen_activity: Any = _UNSEEN
+        self._awaited_start: Optional[str] = None
+        self._awaited_programme: Optional[str] = None
+        self._follow_reads_left = 0
+        self._announced_programme: Optional[str] = None
+        self._announced_polls_left = 0
+        self._follow_task: Optional[asyncio.Task] = None
+        self._follow_list: Optional[list[dict[str, Any]]] = None
+        self._followed_starts = 0
         self._command_payload: dict[str, str] = {}
         self._history_recovery: dict[str, str] = {}
         # (key, shadow value) pairs already reported as unsyncable: sync runs on every
@@ -236,7 +279,8 @@ class HonAppliance:
         """The cloud's `/history` list from the last catalog load, verbatim.
 
         Read by the diagnostics dump only. Refreshed when the catalog is loaded (setup
-        or reload) and by `refresh_command_history`, not on every poll.
+        or reload) and by `refresh_command_history` (a dump, a new cycle), not on every
+        poll.
         """
         return self._command_history
 
@@ -250,13 +294,13 @@ class HonAppliance:
         """Outcome of the last `refresh_command_history`: None if never run."""
         return self._command_history_refresh
 
-    async def refresh_command_history(self) -> None:
-        """Read `/history` again (for a dump, or after a start/stop). Never raises.
+    async def refresh_command_history(self) -> Optional[list[dict[str, Any]]]:
+        """Read `/history` again (for a dump, or for a new cycle). Never raises.
 
         A failure keeps the list and its instant and names the exception's class, so a
         dump can tell a fresh list from an old one it could not replace. Cancellation
-        still propagates. The recovery of the active programme is NOT re-run: it reads
-        the list of the catalog load, and changing that is not a dump's business.
+        still propagates. Returns the list read, None on a failure. The recovery is not
+        re-run here: only a new cycle re-runs it (`_follow_new_cycle`), a dump never.
         """
         self._command_history_refresh = "pending"
         try:
@@ -265,42 +309,186 @@ class HonAppliance:
             raise
         except Exception as error:  # noqa: BLE001 - a dump must degrade, never raise
             self._command_history_refresh = type(error).__name__
-            return
+            return None
         if not isinstance(history, list):
             self._command_history_refresh = "invalid"
-            return
+            return None
         self._command_history = history
         self._command_history_at = datetime.now(timezone.utc)
         self._command_history_refresh = "ok"
+        return history
 
-    def schedule_history_refresh(self) -> None:
-        """Read `/history` again `_HISTORY_REFRESH_DELAY` s from now, in the background.
+    @property
+    def followed_starts(self) -> int:
+        """How many starts made elsewhere were followed since the catalog load.
 
-        Called on the client loop when the cloud accepts a startProgram or stopProgram,
-        so the list a dump prints already holds the command. A pending read is replaced,
-        so two quick commands cost one GET. Never blocks the command; a failure is
-        recorded by `refresh_command_history` and reaches no one. A timer, not a
-        sleeping task: a loop that closes first drops it without a pending task.
+        The integration drops the programme and options chosen in Home Assistant and
+        not started when it moves (issue #112, decision D2 of 2026-10-06).
         """
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return
-        if self._history_refresh_timer is not None:
-            self._history_refresh_timer.cancel()
-        self._history_refresh_timer = loop.call_later(
-            self._HISTORY_REFRESH_DELAY, self._start_history_refresh
-        )
+        return self._followed_starts
 
-    def _start_history_refresh(self) -> None:
-        self._history_refresh_timer = None
-        self._history_refresh_task = asyncio.get_running_loop().create_task(
-            self.refresh_command_history()
-        )
+    def _follow_new_cycle(self) -> None:
+        """Follow a cycle started elsewhere: the app, another phone, the panel.
+
+        Issue #112: `/history` was read only at catalog load, so a programme the app
+        started later showed as the base programme of its shared prCode, with the
+        options of the start read at setup, until a reload. Decisions of 2026-10-06
+        (`apk2/analysis/issue112-wm/7-dump-infy1995-beta10.md` section 4), as the app
+        does on its `TECHNICAL_ACTIVITY_ID` push (same folder,
+        `10-app-selezione-e-history.md` section 3):
+
+        - a new cycle is a new `startProgram` in the context's `commandHistory` slot
+          (pause, stop and a slot the cloud nulled are not) or a new `activityStarted`;
+        - it is followed by reading `/history` in the background and, at the next
+          poll, recovering the start it lists, options included;
+        - one read per cycle whichever signals fire, up to three when a read fails or
+          lacks the start the slot announced;
+        - a list with no newer start (a panel start never reaches it) changes nothing.
+
+        Review of the 5.26.0 release PR (#127), decisions of 2026-10-14: an activity
+        names its programme and channel (`mobileApp` from the app, `appliance` from
+        the panel), so the activity of a start the slot announced is recognised by its
+        programme (S1); an app start seen only through its activity waits, up to three
+        reads, for a row of that programme and takes no other (S3, S4); a panel start
+        reads nothing; every new start gets three reads of its own (S6). An activity
+        that names no programme starts no follow (S4), an announcement whose activity
+        does not come within three polls expires (S1), and a start of ours is
+        recovered but not counted in `followed_starts` (S9).
+
+        Runs once per poll, on the client loop, after the context was read; the list
+        read is applied by `_apply_followed_list` at the start of the next poll, before
+        the context, so the programme name derived from it already sees the recovery.
+        """
+        self._watch_command_slot()
+        self._watch_activity()
+        self._read_for_new_cycle()
+
+    def _apply_followed_list(self) -> None:
+        history, self._follow_list = self._follow_list, None
+        if history is None:
+            return
+        listed = start_identity(history)
+        if (
+            listed is not None
+            and listed != self._recovered_start
+            and self._is_awaited_row(history)
+        ):
+            how = HonCommandLoader(
+                self._api, self, self._catalog_repository
+            ).recover_start(self._commands, history)
+            self._recovered_start = listed
+            if how is not None:
+                self._history_recovery = {**self._history_recovery, "startProgram": how}
+            newest = _newest_start(history)
+            device = newest.get("device")
+            if not (isinstance(device, dict) and device.get("deviceModel") == "addhon"):
+                # Our own start consumed the choices made in HA already (S9).
+                self._followed_starts += 1
+            if _programme_key(newest.get("programName")) == (
+                self._awaited_programme
+            ):
+                self._awaited_programme = None
+        # A start the slot announced, or an app start its activity named, that this
+        # list does not hold yet (the cloud is behind, or a second start came while
+        # the read was in flight) keeps the reads going; anything else ends the
+        # follow, a list with no newer start included.
+        if (
+            self._awaited_start is None or self._awaited_start == self._recovered_start
+        ) and self._awaited_programme is None:
+            self._end_follow()
+
+    def _is_awaited_row(self, history: list[dict[str, Any]]) -> bool:
+        """Whether the newest start of `history` may be applied (S4).
+
+        An app start known only through its activity has no identity, only a
+        programme: a newer row of another programme is not its row. A start the slot
+        announced is awaited by identity, and any newer row is applied on the way.
+        """
+        if self._awaited_programme is None or self._awaited_start not in (
+            None,
+            self._recovered_start,
+        ):
+            return True
+        row = _programme_key(_newest_start(history).get("programName"))
+        return row == self._awaited_programme
+
+    def _watch_command_slot(self) -> None:
+        slot = self._attributes.get("commandHistory")
+        command = slot.get("command") if isinstance(slot, dict) else None
+        if not isinstance(command, dict) or command.get("commandName") != "startProgram":
+            return
+        start = command_identity(command)
+        if start is None or start == self._seen_slot_start:
+            return
+        self._seen_slot_start = start
+        if start != self._recovered_start:
+            self._awaited_start = start
+            self._announced_programme = _programme_key(command.get("programName")) or ""
+            self._announced_polls_left = self._FOLLOW_ATTEMPTS
+            self._arm_follow()
+
+    def _watch_activity(self) -> None:
+        activity = self._attributes.get("activity")
+        started = activity.get("activityStarted") if isinstance(activity, dict) else None
+        if self._seen_activity is _UNSEEN:
+            self._seen_activity = started or None
+            return
+        if not started or started == self._seen_activity:
+            if self._announced_programme is not None:
+                # No activity for the announced start within three polls: it had no
+                # cycle behind it, and must not hide the next one (S1).
+                self._announced_polls_left -= 1
+                if self._announced_polls_left <= 0:
+                    self._announced_programme = None
+            return
+        self._seen_activity = started
+        details = activity.get("attributes") if isinstance(activity, dict) else None
+        details = details if isinstance(details, dict) else {}
+        programme = _programme_key(details.get("programName"))
+        announced, self._announced_programme = self._announced_programme, None
+        if announced is not None and (
+            not announced or programme is None or programme == announced
+        ):
+            # The slot already announced this cycle's start: one read is enough (S1:
+            # only when the activity names that programme, or names none).
+            return
+        if details.get("channel") == "appliance" or programme is None:
+            # Started on the panel: such a start never reaches /history. An activity
+            # naming no programme cannot tell its row from another (S4).
+            return
+        self._awaited_programme = programme
+        self._arm_follow()
+
+    def _arm_follow(self) -> None:
+        # A new start gets its own reads, whatever an earlier one left (S6).
+        self._follow_reads_left = self._FOLLOW_ATTEMPTS
+
+    def _end_follow(self) -> None:
+        self._follow_reads_left = 0
+        self._awaited_start = None
+        self._awaited_programme = None
+
+    def _read_for_new_cycle(self) -> None:
+        if self._follow_reads_left == 0:
+            self._awaited_start = None
+            self._awaited_programme = None
+            return
+        if self._follow_task is not None and not self._follow_task.done():
+            return
+        self._follow_reads_left -= 1
+        self._follow_task = asyncio.get_running_loop().create_task(self._read_followed())
+
+    async def _read_followed(self) -> None:
+        history = await self.refresh_command_history()
+        if history is not None:
+            self._follow_list = history
 
     @property
     def history_recovery(self) -> dict[str, str]:
-        """{command name: how the last catalog load chose the category it restored}.
+        """{command name: how the last recovery chose the category it restored}.
+
+        The catalog load fills it; a followed start (`_follow_new_cycle`) updates the
+        `startProgram` row.
 
         See `CommandHydration.history_recovery`. Read by the diagnostics dump only.
         """
@@ -392,6 +580,8 @@ class HonAppliance:
             else None
         )
         self._history_recovery = hydration.history_recovery
+        # The start this list describes is the one a new cycle is compared with.
+        self._recovered_start = start_identity(hydration.command_history)
         self._command_payload = hydration.command_payload
         self._appliance_model = hydration.appliance_model
         self.sync_params_to_command("settings")
@@ -472,8 +662,13 @@ class HonAppliance:
         min_age = now - timedelta(seconds=self._MINIMAL_UPDATE_INTERVAL)
         if force or not self._last_update or self._last_update < min_age:
             self._last_update = now
+            follow = self.appliance_type in self._FOLLOWED_TYPES
+            if follow:
+                self._apply_followed_list()
             await self.load_attributes()
             self.sync_params_to_command("settings")
+            if follow:
+                self._follow_new_cycle()
 
     # --- derived views ---
     @property
