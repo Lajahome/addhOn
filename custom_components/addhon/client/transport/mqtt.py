@@ -468,6 +468,12 @@ class NativeMqttClient:
                     if name in params:
                         params[name].update(parameter)
                 appliance.sync_params_to_command("settings")
+                # Derived fields (programName above all) follow the pushed values now,
+                # not at the next poll (issue #130). Falls back to nothing for an
+                # appliance object that predates the method.
+                refresh = getattr(appliance, "refresh_derived_attributes", None)
+                if callable(refresh):
+                    refresh()
                 try:
                     observe_mqtt_update(appliance, observed_values)
                 except Exception:

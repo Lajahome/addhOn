@@ -401,6 +401,25 @@ class AmbiguousProgramCodeTest(unittest.TestCase):
     def test_a_code_no_category_declares_is_still_no_program(self) -> None:
         self.assertEqual("No Program", self._build("999").attributes["programName"])
 
+    def test_a_pushed_prcode_renames_the_programme_without_a_poll(self) -> None:
+        # Issue #130: the last start was an app start on code 115, then a cycle was
+        # chosen on the panel and the push reported prCode 124, which only HQD_SMART
+        # declares. The push path re-derives at once instead of waiting for a poll.
+        app = self._build("115", _history("PROGRAMS.WM_WD.IOT_WASH_PERFECT_WHITE"))
+        self.assertEqual("iot_wash_perfect_white", app.attributes["programName"])
+        app.attributes["parameters"]["prCode"].update({"parNewVal": "124"})
+        self.assertEqual("iot_wash_perfect_white", app.attributes["programName"])
+        app.refresh_derived_attributes()
+        self.assertEqual("hqd_smart", app.attributes["programName"])
+
+    def test_a_pushed_shared_prcode_still_names_only_the_base_programme(self) -> None:
+        # A shared code keeps today's answer: the base programme, never a downloaded
+        # one the push alone cannot tell apart.
+        app = self._build("124", _history("PROGRAMS.WM_WD.HQD_SMART"))
+        app.attributes["parameters"]["prCode"].update({"parNewVal": "115"})
+        app.refresh_derived_attributes()
+        self.assertEqual("hqd_cottons", app.attributes["programName"])
+
 
 # --- prPosition tie-break (dead code kept on purpose, see program.py) ---
 #

@@ -90,9 +90,13 @@ class FakeAppliance:
         # can assert the liveness time the handler records.
         self.realtime_seen = []
         self.disconnected_calls = 0
+        self.derived = 0
 
     def sync_params_to_command(self, name: str) -> None:
         self.synced.append(name)
+
+    def refresh_derived_attributes(self) -> None:
+        self.derived += 1
 
     def mark_realtime_seen(self, timestamp=None) -> None:
         # Positive-only, mirroring the engine: realtime traffic -> connected, and the
@@ -730,6 +734,16 @@ class PublishReceivedTest(unittest.TestCase):
         self.assertEqual(app.attributes["parameters"]["temp"].updated,
                          {"parName": "temp", "parValue": "5"})
         self.assertEqual(app.synced, ["settings"])
+        self.assertEqual(hon.notified, 1)
+
+    def test_appliancestatus_rederives_before_notifying(self) -> None:
+        # Issue #130: programName is derived from prCode, and only a poll derived it,
+        # so a panel start showed the previous programme until the next poll.
+        topic = "haier/things/MAC/event/appliancestatus/update"
+        app = FakeAppliance(topic)
+        m, hon = self._client(app)
+        m._on_message(_packet(topic, {"parameters": [{"parName": "temp", "parValue": "5"}]}))
+        self.assertEqual(app.derived, 1)
         self.assertEqual(hon.notified, 1)
 
     _LOGGER_NAME = "custom_components.addhon.client.transport.mqtt"
