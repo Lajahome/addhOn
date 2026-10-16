@@ -326,7 +326,9 @@ class FollowAStartMadeElsewhereTest(_Harness):
         self._poll(app, 6)
         self.assertEqual(reads + 3, self.cloud.history_reads)
         self.assertEqual("TimeoutError", app.command_history_refresh)
-        self.assertEqual("hqd_synthetic_and_coloured", app.attributes["programName"])
+        # The name does not need the list: the running activity names IOT_WASH_DARK on
+        # the live code 116 (issue #130). Only the start's options are left unrecovered.
+        self.assertEqual("iot_wash_dark", app.attributes["programName"])
 
     def test_a_read_that_works_on_a_retry_is_applied(self) -> None:
         app = self._at_setup()
