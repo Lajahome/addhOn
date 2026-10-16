@@ -104,6 +104,11 @@ class HonCommand:
         # cycle started elsewhere is followed (see `mark_recovered`); cleared on the
         # others by the next recovery.
         self._recovered_from_history = False
+        # The live prCode last seen while this category was the selected one, and
+        # whether the dial has moved off it since (issue #130, see `observe_live_code`).
+        # Both reset by every selection.
+        self._live_code_seen: int | None = None
+        self._dial_moved = False
         # The name the user gave a favourite in the app; empty on a schema category.
         # Set by `HonCommandLoader._add_favourites` on its copy (see `favourite_name`).
         self._favourite_name = ""
@@ -139,6 +144,8 @@ class HonCommand:
         # `_parameters`, the triggers and the rule sets.
         new._selected_explicitly = False
         new._recovered_from_history = False
+        new._live_code_seen = None
+        new._dial_moved = False
         # A shallow-copied parameter still SHARES its `_triggers` table with the base, and
         # every rule callback in it closes over THIS command -- so setting a value on the
         # copy would fire rules that mutate the base's parameters (the exact corruption the
@@ -637,6 +644,35 @@ class HonCommand:
         not survive, while this one travels with the category that was picked.
         """
         self._selected_explicitly = True
+        # A new selection is a new baseline: the dial has not moved off it yet.
+        self._live_code_seen = None
+        self._dial_moved = False
+
+    def observe_live_code(self, code: int, own_code: int | None) -> bool:
+        """Record the live prCode while this category is selected; True once the dial moved.
+
+        Issue #130: the category the app last started (Farmer - Nadrag, prCode 115) was
+        still trusted after the user turned the panel's dial through nine programmes and
+        started Cottons, which shares prCode 115. A change of the live code to anything
+        but this category's own code means the programme was chosen on the panel, so the
+        category no longer says what runs until it is selected again. A change TO its
+        own code is its start (the app or Home Assistant started it) and keeps it.
+        """
+        seen, self._live_code_seen = self._live_code_seen, code
+        if seen is not None and code != seen and code != own_code:
+            self._dial_moved = True
+        return self._dial_moved
+
+    def mark_superseded(self) -> None:
+        """The running activity named another programme: this category is not running.
+
+        Same consequence as a dial move, for the case the dial tracking cannot see: a
+        reload during a panel cycle recovers the app's last start on that cycle's shared
+        code with no move to observe, and once the activity empties at the end of the
+        cycle it would name the cycle again (issue #130, live test of 2026-10-16:
+        Denim reappeared after a Cottons cycle). Reset by the next selection.
+        """
+        self._dial_moved = True
 
     @property
     def selected_explicitly(self) -> bool:

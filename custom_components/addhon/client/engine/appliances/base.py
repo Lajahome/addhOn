@@ -86,13 +86,22 @@ class ApplianceExtra:
         #
         # Robustness: `_raw(...) or "0"` handles an empty/absent prCode -> "No Program"
         # instead of `int("")` -> ValueError.
+        #
+        # The running `activity` comes first when it names a programme on the live code
+        # (issue #130): it is the cloud's exact answer, and the only one for a cycle
+        # started on the panel. `name_for_code` is still called, for the dial tracking
+        # it does (see `HonCommand.observe_live_code`).
         program_name = "No Program"
         params = data.get("parameters", {})
         if program := int(self._raw(params, "prCode") or "0"):
             start_cmd = self.parent.settings.get("startProgram.program")
             if isinstance(start_cmd, HonParameterProgram):
+                by_code = start_cmd.name_for_code(
+                    program, self._int_or_none(params, "prPosition")
+                )
                 program_name = (
-                    start_cmd.name_for_code(program, self._int_or_none(params, "prPosition"))
+                    start_cmd.name_for_activity(self._activity_programme(data), program)
+                    or by_code
                     or program_name
                 )
         data["programName"] = program_name
@@ -101,6 +110,13 @@ class ApplianceExtra:
         # the parameters. (See apk/analysis/per-type-derivations.md #5.)
         data["available"] = bool(self.parent.connection)
         return data
+
+    @staticmethod
+    def _activity_programme(data: dict[str, Any]) -> Any:
+        """`programName` of the running activity (`HQD_COTTONS`), None without one."""
+        activity = data.get("activity")
+        details = activity.get("attributes") if isinstance(activity, dict) else None
+        return details.get("programName") if isinstance(details, dict) else None
 
     def settings(self, settings: dict[str, Any]) -> dict[str, Any]:
         return settings

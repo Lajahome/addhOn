@@ -653,6 +653,19 @@ class HonAppliance:
         except Exception:
             _LOGGER.debug("Delivery check failed", exc_info=True)
 
+    def refresh_derived_attributes(self) -> None:
+        """Re-run the per-type derivations (programName, active, pause, available).
+
+        `load_attributes` runs them after every poll; an MQTT push changes the same
+        shadow parameters and calls this, or the derived fields lag the values they
+        are read from until the next poll. Issue #130: a panel start reported
+        prCode 124 by push at 14:50:14 UTC and `programName` kept the previous
+        programme until the poll of 14:52:44. Pure re-derivation from the attributes
+        held: no I/O, no change to the programme resolution itself.
+        """
+        if self._extra:
+            self._attributes = self._extra.attributes(self._attributes)
+
     async def load_statistics(self) -> None:
         self._statistics = await self.api.load_statistics(self)
         self._statistics |= await self.api.load_maintenance(self)

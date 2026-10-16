@@ -401,6 +401,103 @@ class AmbiguousProgramCodeTest(unittest.TestCase):
     def test_a_code_no_category_declares_is_still_no_program(self) -> None:
         self.assertEqual("No Program", self._build("999").attributes["programName"])
 
+    def test_a_pushed_prcode_renames_the_programme_without_a_poll(self) -> None:
+        # Issue #130: the last start was an app start on code 115, then a cycle was
+        # chosen on the panel and the push reported prCode 124, which only HQD_SMART
+        # declares. The push path re-derives at once instead of waiting for a poll.
+        app = self._build("115", _history("PROGRAMS.WM_WD.IOT_WASH_PERFECT_WHITE"))
+        self.assertEqual("iot_wash_perfect_white", app.attributes["programName"])
+        app.attributes["parameters"]["prCode"].update({"parNewVal": "124"})
+        self.assertEqual("iot_wash_perfect_white", app.attributes["programName"])
+        app.refresh_derived_attributes()
+        self.assertEqual("hqd_smart", app.attributes["programName"])
+
+    def test_a_pushed_shared_prcode_still_names_only_the_base_programme(self) -> None:
+        # A shared code keeps today's answer: the base programme, never a downloaded
+        # one the push alone cannot tell apart.
+        app = self._build("124", _history("PROGRAMS.WM_WD.HQD_SMART"))
+        app.attributes["parameters"]["prCode"].update({"parNewVal": "115"})
+        app.refresh_derived_attributes()
+        self.assertEqual("hqd_cottons", app.attributes["programName"])
+
+    # Issue #130, live test of 2026-10-16: the app had last started Denim (prCode 115);
+    # the dial was turned through nine programmes and Cottons, also 115, was started on
+    # the panel. Home Assistant named Denim for the whole cycle.
+
+    def _push(self, app, prcode):
+        app.attributes["parameters"]["prCode"].update({"parNewVal": prcode})
+        app.refresh_derived_attributes()
+        return app.attributes["programName"]
+
+    def test_a_dial_turned_off_the_last_start_no_longer_names_it(self) -> None:
+        app = self._build("115", _history("PROGRAMS.WM_WD.IOT_WASH_PERFECT_WHITE"))
+        self.assertEqual("iot_wash_perfect_white", app.attributes["programName"])
+        self.assertEqual("hqd_smart", self._push(app, "124"))
+        # Back on the shared code: the panel chose it, so only the base programme.
+        self.assertEqual("hqd_cottons", self._push(app, "115"))
+
+    def test_the_start_of_the_selected_category_still_names_it(self) -> None:
+        # The other way onto its code is its own start (app or Home Assistant): the
+        # machine showed the previous cycle's 124, then started the selected 115.
+        app = self._build("124", _history("PROGRAMS.WM_WD.IOT_WASH_PERFECT_WHITE"))
+        self.assertEqual("hqd_smart", app.attributes["programName"])
+        self.assertEqual("iot_wash_perfect_white", self._push(app, "115"))
+
+    def test_selecting_the_category_again_trusts_it_again(self) -> None:
+        app = self._build("115", _history("PROGRAMS.WM_WD.IOT_WASH_PERFECT_WHITE"))
+        self._push(app, "124")
+        self.assertEqual("hqd_cottons", self._push(app, "115"))
+        app.settings["startProgram.program"].value = "iot_wash_perfect_white"
+        self.assertEqual("iot_wash_perfect_white", self._push(app, "115"))
+
+    def _activity(self, app, programme, channel="appliance"):
+        app.attributes["activity"] = {
+            "activityStarted": "2026-10-16 12:25:03",
+            "attributes": {"programName": programme, "channel": channel},
+        }
+        app.refresh_derived_attributes()
+        return app.attributes["programName"]
+
+    def test_the_activity_names_a_panel_start_on_a_shared_code(self) -> None:
+        # The live case without any dial movement seen: the activity is exact.
+        app = self._build("115", _history("PROGRAMS.WM_WD.IOT_WASH_PERFECT_WHITE"))
+        self.assertEqual("iot_wash_perfect_white", app.attributes["programName"])
+        self.assertEqual("hqd_cottons", self._activity(app, "HQD_COTTONS"))
+
+    def test_the_activity_names_a_downloaded_programme_too(self) -> None:
+        app = self._build("115")
+        self.assertEqual("hqd_cottons", app.attributes["programName"])
+        self.assertEqual(
+            "iot_wash_bathrobe",
+            self._activity(app, "PROGRAMS.WM_WD.IOT_WASH_BATHROBE", "mobileApp"),
+        )
+
+    def test_an_activity_off_the_live_code_is_not_trusted(self) -> None:
+        app = self._build("115", _history("PROGRAMS.WM_WD.IOT_WASH_PERFECT_WHITE"))
+        self.assertEqual("iot_wash_perfect_white", self._activity(app, "HQD_SMART"))
+
+    def test_the_category_an_activity_contradicted_stays_off_after_the_cycle(self) -> None:
+        # Live test of 2026-10-16: a reload during the Cottons cycle recovered Denim on
+        # the same code 115, with no dial move to see. When the activity emptied at the
+        # end of the cycle, Denim came back as the name.
+        app = self._build("115", _history("PROGRAMS.WM_WD.IOT_WASH_PERFECT_WHITE"))
+        self.assertEqual("hqd_cottons", self._activity(app, "HQD_COTTONS"))
+        app.attributes["activity"] = {}
+        app.refresh_derived_attributes()
+        self.assertEqual("hqd_cottons", app.attributes["programName"])
+
+    def test_an_activity_naming_the_selected_category_keeps_it(self) -> None:
+        app = self._build("115", _history("PROGRAMS.WM_WD.IOT_WASH_PERFECT_WHITE"))
+        self._activity(app, "IOT_WASH_PERFECT_WHITE", "mobileApp")
+        app.attributes["activity"] = {}
+        app.refresh_derived_attributes()
+        self.assertEqual("iot_wash_perfect_white", app.attributes["programName"])
+
+    def test_an_activity_naming_no_known_programme_is_ignored(self) -> None:
+        app = self._build("115", _history("PROGRAMS.WM_WD.IOT_WASH_PERFECT_WHITE"))
+        self.assertEqual("iot_wash_perfect_white", self._activity(app, "HQD_UNKNOWN"))
+        self.assertEqual("iot_wash_perfect_white", self._activity(app, None))
+
 
 # --- prPosition tie-break (dead code kept on purpose, see program.py) ---
 #
