@@ -488,6 +488,23 @@ class AmbiguousProgramCodeTest(unittest.TestCase):
         app = self._build("115", _history("PROGRAMS.WM_WD.IOT_WASH_PERFECT_WHITE"))
         self.assertEqual("iot_wash_perfect_white", self._activity(app, "HQD_SMART"))
 
+    def test_the_category_an_activity_contradicted_stays_off_after_the_cycle(self) -> None:
+        # Live test of 2026-10-16: a reload during the Cottons cycle recovered Denim on
+        # the same code 115, with no dial move to see. When the activity emptied at the
+        # end of the cycle, Denim came back as the name.
+        app = self._build("115", _history("PROGRAMS.WM_WD.IOT_WASH_PERFECT_WHITE"))
+        self.assertEqual("hqd_cottons", self._activity(app, "HQD_COTTONS"))
+        app.attributes["activity"] = {}
+        app.derive_attributes()
+        self.assertEqual("hqd_cottons", app.attributes["programName"])
+
+    def test_an_activity_naming_the_selected_category_keeps_it(self) -> None:
+        app = self._build("115", _history("PROGRAMS.WM_WD.IOT_WASH_PERFECT_WHITE"))
+        self._activity(app, "IOT_WASH_PERFECT_WHITE", "mobileApp")
+        app.attributes["activity"] = {}
+        app.derive_attributes()
+        self.assertEqual("iot_wash_perfect_white", app.attributes["programName"])
+
     def test_an_activity_naming_no_known_programme_is_ignored(self) -> None:
         app = self._build("115", _history("PROGRAMS.WM_WD.IOT_WASH_PERFECT_WHITE"))
         self.assertEqual("iot_wash_perfect_white", self._activity(app, "HQD_UNKNOWN"))

@@ -217,6 +217,10 @@ class HonParameterProgram(HonParameterEnum):
         Taken only when that category exists, is a schema programme rather than a
         favourite (whose user-typed key no activity spells) and declares the live code:
         an activity that disagrees with the shadow is not trusted over it.
+
+        An activity taken that names another programme than the selected category also
+        marks that category superseded (`HonCommand.mark_superseded`), so the category
+        does not come back as the name when the activity empties at the cycle's end.
         """
         if not isinstance(programme, str) or not programme.strip():
             return None
@@ -228,6 +232,11 @@ class HonParameterProgram(HonParameterEnum):
             or self._category_code(category) != code
         ):
             return None
+        active = self._programs.get(str(self._value))
+        if key != str(self._value) and callable(
+            supersede := getattr(active, "mark_superseded", None)
+        ):
+            supersede()
         return key
 
     @staticmethod
