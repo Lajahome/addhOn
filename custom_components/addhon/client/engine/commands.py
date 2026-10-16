@@ -663,6 +663,17 @@ class HonCommand:
             self._dial_moved = True
         return self._dial_moved
 
+    def mark_superseded(self) -> None:
+        """The running activity named another programme: this category is not running.
+
+        Same consequence as a dial move, for the case the dial tracking cannot see: a
+        reload during a panel cycle recovers the app's last start on that cycle's shared
+        code with no move to observe, and once the activity empties at the end of the
+        cycle it would name the cycle again (issue #130, live test of 2026-10-16:
+        Denim reappeared after a Cottons cycle). Reset by the next selection.
+        """
+        self._dial_moved = True
+
     @property
     def selected_explicitly(self) -> bool:
         """True if this category was chosen, rather than left active by default."""
