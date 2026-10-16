@@ -174,8 +174,13 @@ class HonParameterProgram(HonParameterEnum):
         # unless `/history` named it: the dishwasher's shadow reports a prPosition its
         # catalog does not declare (2 dumps out of 2), and the guard then hid every
         # programme recovered on a shared code (issue #112, decision D5).
+        # Nor once the panel's dial moved off it (issue #130): the category the app last
+        # started says nothing about a cycle chosen on the panel, even when that cycle
+        # shares its code. `_dial_moved` records the live code on every call, so it runs
+        # first, whatever the other conditions decide.
         if (
             active is not None
+            and not self._dial_moved(active, code)
             and getattr(active, "selected_explicitly", False)
             and self._category_code(active) == code
             and (
@@ -190,6 +195,40 @@ class HonParameterProgram(HonParameterEnum):
             if len(exact) == 1:
                 return exact[0]
         return self.ids.get(code)
+
+    @classmethod
+    def _dial_moved(cls, category: Any, code: int) -> bool:
+        """Whether the dial moved off `category` since it was selected (issue #130)."""
+        observe = getattr(category, "observe_live_code", None)
+        if not callable(observe):
+            return False
+        return bool(observe(code, cls._category_code(category)))
+
+    def name_for_activity(self, programme: Any, code: int) -> str | None:
+        """The category the cloud's running `activity` names, or None.
+
+        Issue #130: the activity of a cycle names its exact programme
+        (`programName: "HQD_COTTONS"`), wherever it was started -- `channel` is
+        `appliance` for the panel, `mobileApp` for the app. It is the only exact source
+        for a panel start on a shared code: the shadow's prCode 115 is Cottons, Perfect
+        White and Denim alike. `activity` describes the cycle in progress (the per-type
+        `active` is derived from it being non-empty).
+
+        Taken only when that category exists, is a schema programme rather than a
+        favourite (whose user-typed key no activity spells) and declares the live code:
+        an activity that disagrees with the shadow is not trusted over it.
+        """
+        if not isinstance(programme, str) or not programme.strip():
+            return None
+        key = programme.strip().rsplit(".", 1)[-1].lower()
+        category = self._programs.get(key)
+        if (
+            category is None
+            or self._is_favourite(category)
+            or self._category_code(category) != code
+        ):
+            return None
+        return key
 
     @staticmethod
     def _is_favourite(category: Any) -> bool:
