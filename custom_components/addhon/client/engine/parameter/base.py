@@ -22,6 +22,7 @@ class HonParameter:
         self._typology: str = ""
         self._mandatory: int = 0
         self._value: str | float = ""
+        self._written: bool = False
         self._group = group
         # value-trigger -> list of (callback, rule). Typed Any so the engine is not
         # tied to the HonRule class (our HonRule).
@@ -32,6 +33,10 @@ class HonParameter:
         self._category = self._attributes.get("category", "")
         self._typology = self._attributes.get("typology", "")
         self._mandatory = self._attributes.get("mandatory", 0)
+        # Every subclass re-seeds its value right after calling this, so clearing the
+        # flag here is what lets `reset()` (which re-runs `_set_attributes`) put a
+        # parameter back to "nobody wrote anything".
+        self._written = False
 
     @property
     def key(self) -> str:
@@ -54,13 +59,31 @@ class HonParameter:
         return self.schema_value is not None
 
     @property
+    def is_unset(self) -> bool:
+        """True when neither the schema nor anyone since the last build/reset gave a value.
+
+        Without a `defaultValue`/`fixedValue`, each typology seeds a value of its own (a
+        range its `min`, an enum or a fixed "0"), one this engine invents so reads never
+        come back empty. The hOn app has nothing to invent it from: its `setValue` falls
+        through `fixedValue`, `defaultValue` and the value its parameter already holds to
+        `null` (apk2 decomp.txt:1393672-1393734; `this.parameter.value` @1393706-1393712),
+        which none of its send paths lets reach the wire. This tells the two apart for the
+        payload builder, see `HonCommand._drop_unset_start_keys`. Any write through the
+        setter -- a user option, a rule, the command-history recovery, a favourite --
+        counts, as the app's own last-program and favourite slots outrank the schema;
+        `reset()` clears it.
+        """
+        return not self._written and self.schema_value is None
+
+    @property
     def schema_value(self) -> Any | None:
         """What the SCHEMA prescribes for this parameter, or None if it prescribes nothing.
 
         `fixedValue` first, then `defaultValue`, which is the hOn app's own order: its
-        `setValue` reads `dictionaryParameter.fixedValue ?? dictionaryParameter.defaultValue`
-        off the selected program's schema node (decomp.txt:1778771-1778793, analysed in
-        apk/analysis/issue98-99-program-options-and-wd-dry.md section 8).
+        `setValue` reads `dictionaryParameter.fixedValue || dictionaryParameter.defaultValue`
+        off the selected program's schema node (apk2 decomp.txt:1393685-1393703; first
+        analysed on 2.27.9 in apk/analysis/issue98-99-program-options-and-wd-dry.md
+        section 8).
 
         This is deliberately NOT `value`, and the difference is the whole point. `value` is
         LIVE state: the Start path writes the user's chosen options straight into the
@@ -114,6 +137,7 @@ class HonParameter:
     @value.setter
     def value(self, value: str | float) -> None:
         self._value = value
+        self._written = True
         self.check_trigger(value)
 
     @property

@@ -428,10 +428,27 @@ class WasherStartEnergyLabelBodyTest(unittest.IsolatedAsyncioTestCase):
                 body = await _start(_Connection(_catalog(platform=platform)))
                 self.assertEqual("2", body["parameters"]["dirtyLevel"])
                 self.assertEqual("1", body["parameters"]["dryLevel"])
-                self.assertEqual("0", body["parameters"]["dryTime"])
+                self.assertNotIn("dryTime", body["parameters"])
                 self.assertEqual("40", body["parameters"]["temp"])
                 self.assertEqual("1", body["ancillaryParameters"]["energyLabel"])
                 self.assertEqual("1", body["attributes"]["energyLabel"])
+
+    async def test_a_level_and_a_time_are_labelled_before_the_dry_mode_rule(self) -> None:
+        # Issue #133: the app's builder works the label out of the parameters as they
+        # are BEFORE checkDryAndAutodoseOptions turns them into dryTime '0' +
+        # dryProgFlag '1' (apk2 decomp.txt:2632501, then @2632516-2632523). Dirt 2,
+        # dryLevel 1 (the default), dryTime 2, 40 C is reference case 4 above (CASES,
+        # checked against the decompiled chain in Node): 211 minutes -> '2'. Computed on
+        # the body after the rule (dryTime '0', case 1) it would be '1'.
+        body = await _start(
+            _Connection(_catalog(platform="CHG")),
+            options={"dirtyLevel": "2", "temp": "40", "dryTime": "2"},
+        )
+        self.assertEqual("1", body["parameters"]["dryLevel"])
+        self.assertEqual("0", body["parameters"]["dryTime"])
+        self.assertEqual("1", body["parameters"]["dryProgFlag"])
+        self.assertEqual("2", body["ancillaryParameters"]["energyLabel"])
+        self.assertEqual("2", body["attributes"]["energyLabel"])
 
     async def test_without_the_table_the_body_is_todays(self) -> None:
         with_table = await _start(_Connection(_catalog(platform="CHG")))

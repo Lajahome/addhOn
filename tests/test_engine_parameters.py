@@ -176,7 +176,7 @@ class SchemaValueTest(unittest.TestCase):
     never undoes them on success, so `value` on a program the user has run before is their
     own past choice, while `_attributes` is the schema as received and nothing writes to it.
     Mirrors the hOn app, whose `setValue` reads
-    `dictionaryParameter.fixedValue ?? defaultValue` (decomp.txt:1778771-1778793).
+    `dictionaryParameter.fixedValue || defaultValue` (apk2 decomp.txt:1393685-1393703).
     """
 
     def test_fixed_value_wins_over_default(self) -> None:
@@ -718,6 +718,47 @@ class RangeValuesDriftF3Test(unittest.TestCase):
         p = _mk_range("0", "22", "5,5")
         self.assertEqual(p.step, 5.5)
         self.assertEqual(p.values, ["0.0", "5.5", "11.0", "16.5", "22.0"])
+
+
+class UnsetParameterTest(unittest.TestCase):
+    """`is_unset` on every typology: the schema prescribes nothing and nobody wrote a value."""
+
+    def test_a_fixed_without_fixed_value_is_unset_until_written(self):
+        p = NaFixed("prStr", {"typology": "fixed", "category": "command", "mandatory": 1}, "parameters")
+        self.assertTrue(p.is_unset)
+        self.assertEqual("0", p.value)  # reads still see the fallback
+        p.value = "PROGRAMS.TD.MIX_AND_DRY"
+        self.assertFalse(p.is_unset)
+        p.reset()
+        self.assertTrue(p.is_unset)
+
+    def test_a_fixed_with_fixed_value_is_never_unset(self):
+        p = NaFixed("prCode", {"typology": "fixed", "fixedValue": "17"}, "parameters")
+        self.assertFalse(p.is_unset)
+
+    def test_an_enum_without_default_is_unset_until_written(self):
+        p = NaEnum("mode", {"typology": "enum", "enumValues": ["0", "1"]}, "parameters")
+        self.assertTrue(p.is_unset)
+        p.value = "0"  # a real choice of the fallback value counts
+        self.assertFalse(p.is_unset)
+        p.reset()
+        self.assertTrue(p.is_unset)
+
+    def test_an_enum_with_default_is_never_unset(self):
+        p = NaEnum("mode", {"typology": "enum", "defaultValue": "1", "enumValues": ["0", "1"]}, "parameters")
+        self.assertFalse(p.is_unset)
+
+    def test_a_range_keeps_its_meaning(self):
+        p = NaRange(
+            "dryTime",
+            {"typology": "range", "minimumValue": "1", "maximumValue": "4", "incrementValue": "1"},
+            "parameters",
+        )
+        self.assertTrue(p.is_unset)
+        p.value = 2
+        self.assertFalse(p.is_unset)
+        p.reset()
+        self.assertTrue(p.is_unset)
 
 
 if __name__ == "__main__":
