@@ -652,5 +652,54 @@ class StainTypeAndAntiCreaseTest(unittest.TestCase):
         self.assertEqual(entity._key_to_raw["fruit"], "26")
 
 
+class KeepFreshReadBackTest(unittest.TestCase):
+    """Issue #112: the Keep Fresh switch read `off` a minute into every cycle started
+    with it, because the appliance reports `permanentPressStatus: 0` all cycle long."""
+
+    def _switches(self, mach_mode, sent="1", reported="0", superseded=False):
+        appliance, _ = _build_appliance(_WM_HW90_FIXTURE)
+        command = appliance.commands["startProgram"]
+        # The category the start went out on, as the Start button or a /history
+        # recovery leaves it: selected, carrying the values sent.
+        command.mark_selected_explicitly()
+        command.parameters["permanentPressStatus"].value = sent
+        command.parameters["nightWashStatus"].value = "1"
+        if superseded:
+            command.mark_superseded()
+        data = {
+            "type": APPLIANCE_WM, "appliance": appliance, "name": "Washer",
+            "attributes": {
+                "machMode": mach_mode,
+                "permanentPressStatus": reported,
+                "nightWashStatus": "0",
+            },
+        }
+        coordinator = types.SimpleNamespace(data={"wm1": data}, hass=None)
+        built = switch._appliance_switches(coordinator, "wm1", data, None)
+        return {e._desc.key: e for e in built if hasattr(e, "_desc")}
+
+    def test_a_running_cycle_shows_what_its_start_sent(self) -> None:
+        for mode in ("2", "3", "4", "7", "10"):
+            with self.subTest(machMode=mode):
+                self.assertTrue(self._switches(mode)["permanent_press"].is_on)
+
+    def test_a_start_without_keep_fresh_still_reads_off(self) -> None:
+        self.assertFalse(self._switches("2", sent="0")["permanent_press"].is_on)
+
+    def test_a_cycle_chosen_on_the_dial_keeps_the_device_reading(self) -> None:
+        # Issue #130: the category no longer describes the cycle in progress.
+        self.assertFalse(self._switches("2", superseded=True)["permanent_press"].is_on)
+
+    def test_outside_a_cycle_the_device_reading_stays(self) -> None:
+        for mode in ("0", "1"):
+            with self.subTest(machMode=mode):
+                self.assertFalse(self._switches(mode)["permanent_press"].is_on)
+
+    def test_options_the_appliance_reports_are_untouched(self) -> None:
+        # Only Keep Fresh is in the unreported set: any other option keeps the device
+        # reading, here a live "0" over the "1" the category carries.
+        self.assertFalse(self._switches("2")["night_wash"].is_on)
+
+
 if __name__ == "__main__":
     unittest.main()

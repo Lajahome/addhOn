@@ -65,6 +65,16 @@ _LOGGER = logging.getLogger(__name__)
 # swaps the active category (program.py / commands.py), but the command name is stable.
 STARTPROGRAM_COMMAND = "startProgram"
 
+# Start options the appliance never reports back (issue #112). The HW90 shadow carries
+# `permanentPressStatus: 0` for the whole cycle whatever was started, the hOn app shows
+# Keep Fresh off as well, and the cycle's `activity` says "0" too: on 2026-10-16 it did
+# for a Cottons cycle whose Keep Fresh then ran (phase 20, door locked). While such a
+# cycle runs, the value the start sent is the only true answer.
+_UNREPORTED_START_OPTIONS = frozenset({"permanentPressStatus"})
+# machMode of a cycle under way or just finished (WM_STATE_MAP): running, paused, the two
+# delayed-start states, finished and the Keep Fresh phase itself.
+_CYCLE_MACH_MODES = frozenset({"2", "3", "4", "5", "7", "10"})
+
 # Safety cap when materializing the reachable values of a range parameter: a malformed
 # range (huge max / tiny step) must never loop unbounded while building a select's options.
 _MAX_RANGE_CHOICES = 1000
@@ -660,10 +670,38 @@ class HonProgramOptionEntity(HonBaseEntity):
         prescribed = self._prescribed_raw()
         if prescribed is not None and self._renderable(prescribed):
             return prescribed
+        sent = self._sent_for_this_cycle()
+        if sent is not None:
+            return sent
         raw = self._get_attr(self._param)
         if raw is not None:
             return raw
         return self._get_attr(f"{STARTPROGRAM_COMMAND}.{self._param}")
+
+    def _sent_for_this_cycle(self):
+        """What the start of the cycle in progress sent for an unreported option, or None.
+
+        Only for `_UNREPORTED_START_OPTIONS`, only while a cycle runs or has just finished,
+        and only when the active category is that cycle's start: one Home Assistant
+        started, or the app's start `/history` recovered. A cycle chosen on the dial
+        marks the category superseded (`HonCommand.superseded`, issue #130) and gets the
+        device reading instead, as before. Issue #112: Keep Fresh read `off` about a
+        minute into every cycle it was started with.
+        """
+        if self._param not in _UNREPORTED_START_OPTIONS:
+            return None
+        if normalize_code(self._get_attr("machMode")) not in _CYCLE_MACH_MODES:
+            return None
+        command = startprogram_command(self._appliance)
+        if (
+            command is None
+            or not getattr(command, "selected_explicitly", False)
+            or getattr(command, "superseded", False)
+        ):
+            return None
+        params = getattr(command, "parameters", None)
+        param = params.get(self._param) if isinstance(params, dict) else None
+        return getattr(param, "value", None) if param is not None else None
 
     def _active_option_param(self):
         """Resolve this param off the ACTIVE startProgram command's parameters only.
