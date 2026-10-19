@@ -41,6 +41,9 @@ _DW_FIXTURE = REPO / "tests" / "fixtures" / "dw_haier_xs6b0s3fsb" / "startprogra
 # Issue #112: two washers of the newer schemas, from the reporters' beta7 diagnostics.
 _WM_HAIER_FIXTURE = REPO / "tests" / "fixtures" / "wm_haier_hw80_b14959tu1s" / "startprogram_params.json"
 _WM_CANDY_HQD_FIXTURE = REPO / "tests" / "fixtures" / "wm_candy_bp49sbl8fr" / "startprogram_params.json"
+# A third HQD washer, from the v5.27.1 diagnostics of issue #130: its category carries the
+# stain type and anti-crease options the two above lack.
+_WM_HW90_FIXTURE = REPO / "tests" / "fixtures" / "wm_haier_hw90_b14387tu1s" / "startprogram_params.json"
 
 
 def _mod(name: str) -> types.ModuleType:
@@ -163,6 +166,7 @@ from custom_components.addhon.const import (  # noqa: E402
     APPLIANCE_WD,
     APPLIANCE_WM,
     DIVERTER_LEVEL_LABELS,
+    STAIN_TYPE_MAP,
 )
 from custom_components.addhon.program_options import (  # noqa: E402
     couple_half_load_to_basket,
@@ -285,6 +289,7 @@ class CatalogPinTest(unittest.TestCase):
         # Washers of the newer schemas (issue #112).
         "night_wash": "nightWashStatus",
         "silent_mode": "silentMode",
+        "anti_crease_status": "antiCreaseStatus",
         "soak_prewash": "haier_SoakPrewashSelection",
         "fast_mode": "fastMode",
         "intensive_mode": "intensiveMode",
@@ -306,6 +311,7 @@ class CatalogPinTest(unittest.TestCase):
         ("wash_temp", "temp"),
         ("diverter_level", "diverterLevel"),  # dishwasher, issue #106
         ("rinse_iterations", "rinseIterations"),  # washers, issue #112
+        ("stain_type", "stainType"),  # washers, issue #112
     }
     _PINNED_NUMBERS = {
         "delay_time": "delayTime",
@@ -604,6 +610,46 @@ class NewerWasherSchemaTest(unittest.TestCase):
         self.assertEqual(rinses, ["0", "1", "2", "3", "4", "5"])
         wash_time = option_choices(startprogram_option_param(appliance, "mainWashTime"))
         self.assertEqual(wash_time, [str(m) for m in range(5, 55, 5)])
+
+
+class StainTypeAndAntiCreaseTest(unittest.TestCase):
+    """Issue #112's two options left without a control, on the HW90 of issue #130.
+
+    `stainType` is a range 0..26 settable in 42 programmes there and `antiCreaseStatus` a
+    range 0..1 settable in 69. Without a control every start from Home Assistant sent the
+    schema's "0" for both.
+    """
+
+    def _data(self):
+        appliance, _ = _build_appliance(_WM_HW90_FIXTURE)
+        return {"type": APPLIANCE_WM, "appliance": appliance, "name": "Washer", "attributes": {}}
+
+    def _coordinator(self, data):
+        return types.SimpleNamespace(data={"wm1": data}, hass=None)
+
+    def test_both_are_settable_on_the_real_washer(self) -> None:
+        appliance = self._data()["appliance"]
+        for param in ("stainType", "antiCreaseStatus"):
+            with self.subTest(param=param):
+                self.assertTrue(is_settable_option(startprogram_option_param(appliance, param)))
+
+    def test_the_anti_crease_switch_is_built_with_off_0_and_on_1(self) -> None:
+        data = self._data()
+        built = switch._appliance_switches(self._coordinator(data), "wm1", data, None)
+        anti = [e for e in built if getattr(e, "_desc", None) is not None and e._desc.key == "anti_crease_status"]
+        self.assertEqual(len(anti), 1)
+        self.assertEqual((anti[0]._off, anti[0]._on), ("0", "1"))
+        # The older schemas' `anticrease` row stays out: this washer has no such parameter.
+        self.assertNotIn("anticrease", {e._desc.key for e in built if hasattr(e, "_desc")})
+
+    def test_the_stain_select_offers_every_stain_by_name(self) -> None:
+        data = self._data()
+        desc = next(d for d in select._PROGRAM_OPTION_SELECTS if d.key == "stain_type")
+        self.assertTrue(select.HonProgramOptionSelect.supports(data["appliance"], desc.param, desc.drop))
+        entity = select.HonProgramOptionSelect(self._coordinator(data), "wm1", desc)
+        self.assertEqual(entity.options, list(STAIN_TYPE_MAP.values()))
+        self.assertEqual(entity._key_to_raw["wine"], "1")
+        self.assertEqual(entity._key_to_raw["fruit"], "26")
 
 
 if __name__ == "__main__":

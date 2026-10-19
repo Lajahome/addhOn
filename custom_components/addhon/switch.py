@@ -404,6 +404,11 @@ _PROGRAM_OPTION_SWITCHES: tuple[HonProgramOptionSwitchDescription, ...] = (
     # both GOODNIGHT and writes whichever the schema has, so a model has one or the other.
     HonProgramOptionSwitchDescription(key="night_wash", param="nightWashStatus", types=_WASH_TYPES, icon="mdi:weather-night"),
     HonProgramOptionSwitchDescription(key="silent_mode", param="silentMode", types=_WASH_TYPES, icon="mdi:volume-off"),
+    # `antiCreaseStatus` (issue #112): the anti-crease option of the HQD washer schema, a
+    # range 0..1 settable in 69 programmes of the HW90 and a separate toggle from Keep
+    # Fresh in the hOn app. The older schemas call it `anticrease` (row above); a model
+    # has one or the other, so the two rows never build two entities on one washer.
+    HonProgramOptionSwitchDescription(key="anti_crease_status", param="antiCreaseStatus", types=_WASH_TYPES, icon="mdi:tshirt-crew"),
     # The soak pre-wash is a range 0..2 step 2: on is "2". The token resolution in
     # `HonProgramOptionSwitch` (off "0", on = the first other value) gives exactly that,
     # as the app's own toggle rule does (step == max -> toggle, on = max).
