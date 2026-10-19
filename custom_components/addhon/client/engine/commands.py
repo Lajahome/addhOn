@@ -921,6 +921,16 @@ class HonCommand:
         self._dial_moved = True
 
     @property
+    def superseded(self) -> bool:
+        """True once the dial or the running activity showed this category is not running.
+
+        Set by `observe_live_code` and `mark_superseded`, cleared by the next selection.
+        Read by the HA layer to decide whether this category's values describe the cycle
+        in progress.
+        """
+        return self._dial_moved
+
+    @property
     def selected_explicitly(self) -> bool:
         """True if this category was chosen, rather than left active by default."""
         return self._selected_explicitly
