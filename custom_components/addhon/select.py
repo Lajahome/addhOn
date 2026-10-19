@@ -59,6 +59,7 @@ from .const import (
     PROGRAM_PARAM_NAMES,
     PROGRAM_PENDING_OPTIONS,
     PROGRAM_PENDING_STORE,
+    STAIN_TYPE_MAP,
     STEAM_LEVEL_LABELS,
     TEMP_LEVEL_LABELS,
 )
@@ -297,6 +298,14 @@ _PROGRAM_OPTION_SELECTS: tuple[HonProgramOptionSelectDescription, ...] = (
     HonProgramOptionSelectDescription(
         key="rinse_iterations", param="rinseIterations",
         translation_key="rinse_iterations", types=_WASH_TYPES, icon="mdi:water-plus",
+    ),
+    # Stain type (issue #112): a range 0..26 settable in 42 programmes of the HW90
+    # (HQD schema), the stain removal programmes among them. Without a control every
+    # start from Home Assistant sent the schema's "0" (no stain). The codes are the app's
+    # StainTypes enum the read-only `stain_type` sensor already labels.
+    HonProgramOptionSelectDescription(
+        key="stain_type", param="stainType", translation_key="stain_type",
+        types=_WASH_TYPES, label_map=STAIN_TYPE_MAP, icon="mdi:liquid-spot",
     ),
 )
 
