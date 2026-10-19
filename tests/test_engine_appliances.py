@@ -438,7 +438,7 @@ class AmbiguousProgramCodeTest(unittest.TestCase):
 
     def _push(self, app, prcode):
         app.attributes["parameters"]["prCode"].update({"parNewVal": prcode})
-        app.refresh_derived_attributes()
+        app.derive_attributes()
         return app.attributes["programName"]
 
     def test_a_dial_turned_off_the_last_start_no_longer_names_it(self) -> None:
@@ -467,7 +467,7 @@ class AmbiguousProgramCodeTest(unittest.TestCase):
             "activityStarted": "2026-10-16 12:25:03",
             "attributes": {"programName": programme, "channel": channel},
         }
-        app.refresh_derived_attributes()
+        app.derive_attributes()
         return app.attributes["programName"]
 
     def test_the_activity_names_a_panel_start_on_a_shared_code(self) -> None:
@@ -495,14 +495,14 @@ class AmbiguousProgramCodeTest(unittest.TestCase):
         app = self._build("115", _history("PROGRAMS.WM_WD.IOT_WASH_PERFECT_WHITE"))
         self.assertEqual("hqd_cottons", self._activity(app, "HQD_COTTONS"))
         app.attributes["activity"] = {}
-        app.refresh_derived_attributes()
+        app.derive_attributes()
         self.assertEqual("hqd_cottons", app.attributes["programName"])
 
     def test_an_activity_naming_the_selected_category_keeps_it(self) -> None:
         app = self._build("115", _history("PROGRAMS.WM_WD.IOT_WASH_PERFECT_WHITE"))
         self._activity(app, "IOT_WASH_PERFECT_WHITE", "mobileApp")
         app.attributes["activity"] = {}
-        app.refresh_derived_attributes()
+        app.derive_attributes()
         self.assertEqual("iot_wash_perfect_white", app.attributes["programName"])
 
     def test_an_activity_naming_no_known_programme_is_ignored(self) -> None:
