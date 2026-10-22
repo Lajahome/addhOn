@@ -696,9 +696,39 @@ class KeepFreshReadBackTest(unittest.TestCase):
                 self.assertFalse(self._switches(mode)["permanent_press"].is_on)
 
     def test_options_the_appliance_reports_are_untouched(self) -> None:
-        # Only Keep Fresh is in the unreported set: any other option keeps the device
-        # reading, here a live "0" over the "1" the category carries.
+        # nightWashStatus is not in the unreported set: it keeps the device reading,
+        # here a live "0" over the "1" the category carries.
         self.assertFalse(self._switches("2")["night_wash"].is_on)
+
+
+class StainTypeReadBackTest(unittest.TestCase):
+    """Live test of 2026-10-22: an Okos A.I. start sent stainType 19 (sweat), the cycle
+    ran with it (activity and /history said 19), and the select fell back to "none"
+    because the shadow kept "0" with no push for it."""
+
+    def _select(self, mach_mode, sent="19", reported="0", superseded=False):
+        appliance, _ = _build_appliance(_WM_HW90_FIXTURE)
+        command = appliance.commands["startProgram"]
+        command.mark_selected_explicitly()
+        command.parameters["stainType"].value = sent
+        if superseded:
+            command.mark_superseded()
+        data = {
+            "type": APPLIANCE_WM, "appliance": appliance, "name": "Washer",
+            "attributes": {"machMode": mach_mode, "stainType": reported},
+        }
+        coordinator = types.SimpleNamespace(data={"wm1": data}, hass=None)
+        desc = next(d for d in select._PROGRAM_OPTION_SELECTS if d.key == "stain_type")
+        return select.HonProgramOptionSelect(coordinator, "wm1", desc)
+
+    def test_a_running_cycle_shows_the_stain_its_start_sent(self) -> None:
+        self.assertEqual(self._select("2").current_option, "sweat")
+
+    def test_a_cycle_chosen_on_the_dial_keeps_the_device_reading(self) -> None:
+        self.assertEqual(self._select("2", superseded=True).current_option, "none")
+
+    def test_outside_a_cycle_the_device_reading_stays(self) -> None:
+        self.assertEqual(self._select("1").current_option, "none")
 
 
 if __name__ == "__main__":

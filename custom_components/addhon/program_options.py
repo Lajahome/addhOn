@@ -70,7 +70,10 @@ STARTPROGRAM_COMMAND = "startProgram"
 # Keep Fresh off as well, and the cycle's `activity` says "0" too: on 2026-10-16 it did
 # for a Cottons cycle whose Keep Fresh then ran (phase 20, door locked). While such a
 # cycle runs, the value the start sent is the only true answer.
-_UNREPORTED_START_OPTIONS = frozenset({"permanentPressStatus"})
+# `stainType` likewise: on 2026-10-22 an Okos A.I. start sent 19 (sweat), the cycle's
+# activity and the cloud's /history both carried 19, and the shadow kept "0" with no push
+# for it (the same start's `antiCreaseStatus` was pushed 0 -> 1, so that one stays out).
+_UNREPORTED_START_OPTIONS = frozenset({"permanentPressStatus", "stainType"})
 # machMode of a cycle under way or just finished (WM_STATE_MAP): running, paused, the two
 # delayed-start states, finished and the Keep Fresh phase itself.
 _CYCLE_MACH_MODES = frozenset({"2", "3", "4", "5", "7", "10"})
