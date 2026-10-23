@@ -114,6 +114,12 @@
   "device": {
     "diagnostics": {
       "name": "Diagnóstico do addhOn"
+    },
+    "lc_washer": {
+      "name": "{name} Máquina de lavar"
+    },
+    "lc_dryer": {
+      "name": "{name} Máquina de secar"
     }
   },
   "entity": {
@@ -174,6 +180,9 @@
       },
       "errors": {
         "name": "Erros"
+      },
+      "anti_crease_time": {
+        "name": "Tempo antivincos"
       },
       "delay_time": {
         "name": "Atraso de início"
@@ -615,6 +624,15 @@
       },
       "door_lock": {
         "name": "Porta bloqueada"
+      },
+      "pause": {
+        "name": "Em pausa"
+      },
+      "auto_detergent": {
+        "name": "Dosagem automática de detergente"
+      },
+      "auto_softener": {
+        "name": "Dosagem automática de amaciador"
       },
       "child_lock": {
         "name": "Bloqueio para crianças"

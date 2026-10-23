@@ -120,6 +120,7 @@ from .hpwh import (
     lifetime_as_dict,
     lifetime_from_dict,
 )
+from .laundry_centre import lc_parent_id
 from .ref_programs import favourite_names, program_categories
 
 _LOGGER = logging.getLogger(__name__)
@@ -578,7 +579,9 @@ _CUSTOM_ENTITY_SOURCES: tuple[dict, ...] = (
 #
 # Kept honest by `test_engine_derived_attrs_matches_the_engine` (test_diagnostics.py),
 # which parses `client/engine/` for the assignments rather than trusting this list.
-_ENGINE_DERIVED_ATTRS = frozenset({"programName", "available", "active", "pause"})
+_ENGINE_DERIVED_ATTRS = frozenset(
+    {"programName", "available", "active", "pause", "WMprogramName", "TDprogramName"}
+)
 
 _COVERAGE_META_ATTRS = frozenset(
     {
@@ -2725,13 +2728,19 @@ def _mapped_sets(
     # question and a different one.
     for desc in SENSORS.get(app_type, ()):
         declared = [desc.attr_key, *(getattr(desc, "attr_fallbacks", ()) or ())]
+        # A Laundry Centre unit row (#124) is keyed like its unique_id suffix,
+        # `<unit>_<key>`; its remaining time declares the hour half as a fallback.
+        unit = getattr(desc, "unit", None)
         mapped_attrs.update(declared)
-        sources[f"sensor.{desc.key}"] = _source_row(
+        row = f"{unit}_{desc.key}" if unit is not None else desc.key
+        sources[f"sensor.{row}"] = _source_row(
             read=[key for name in declared for key in _read_chain(name)]
         )
     for desc in BINARY_SENSORS.get(app_type, ()):
         mapped_attrs.add(desc.attr_key)
-        sources[f"binary_sensor.{desc.key}"] = _source_row(
+        unit = getattr(desc, "unit", None)
+        row = f"{unit}_{desc.key}" if unit is not None else desc.key
+        sources[f"binary_sensor.{row}"] = _source_row(
             read=_read_chain(desc.attr_key)
         )
     # The only row in this walk with no type gate and no table to be empty, so
@@ -5926,7 +5935,13 @@ async def async_get_device_diagnostics(
         return {"generated_at": _stamp_text(now)}
     data = coord_data.get(appliance_id)
     if not isinstance(data, Mapping):
-        return {"generated_at": _stamp_text(now)}
+        # A unit device of a Laundry Centre (`<id>_WM` / `<id>_TD`) is not a key of the
+        # snapshot; it answers with the dump of its LC. Only reached on a direct miss.
+        lc_id = lc_parent_id(appliance_id, coord_data)
+        data = coord_data.get(lc_id) if lc_id is not None else None
+        if not isinstance(data, Mapping):
+            return {"generated_at": _stamp_text(now)}
+        appliance_id = lc_id
     await _refresh_command_history(hass, entry, data.get("appliance"))
     # The inventory is built over EVERY appliance id, not just this one: attribution
     # is by unique_id prefix and those prefixes nest, so hiding the siblings would

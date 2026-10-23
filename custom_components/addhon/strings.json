@@ -136,6 +136,12 @@
   "device": {
     "diagnostics": {
       "name": "addhOn diagnostics"
+    },
+    "lc_washer": {
+      "name": "{name} Washer"
+    },
+    "lc_dryer": {
+      "name": "{name} Dryer"
     }
   },
   "entity": {
@@ -196,6 +202,9 @@
       },
       "errors": {
         "name": "Errors"
+      },
+      "anti_crease_time": {
+        "name": "Anti-crease time"
       },
       "delay_time": {
         "name": "Start delay"
@@ -664,6 +673,15 @@
       },
       "door_lock": {
         "name": "Door locked"
+      },
+      "pause": {
+        "name": "Paused"
+      },
+      "auto_detergent": {
+        "name": "Automatic detergent dosing"
+      },
+      "auto_softener": {
+        "name": "Automatic softener dosing"
       },
       "child_lock": {
         "name": "Child lock"

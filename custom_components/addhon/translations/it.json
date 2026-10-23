@@ -136,6 +136,12 @@
   "device": {
     "diagnostics": {
       "name": "addhOn diagnostica"
+    },
+    "lc_washer": {
+      "name": "{name} Lavatrice"
+    },
+    "lc_dryer": {
+      "name": "{name} Asciugatrice"
     }
   },
   "entity": {
@@ -196,6 +202,9 @@
       },
       "errors": {
         "name": "Errori"
+      },
+      "anti_crease_time": {
+        "name": "Tempo antipiega"
       },
       "delay_time": {
         "name": "Ritardo Avvio"
@@ -664,6 +673,15 @@
       },
       "door_lock": {
         "name": "Oblò Bloccato"
+      },
+      "pause": {
+        "name": "In pausa"
+      },
+      "auto_detergent": {
+        "name": "Dosaggio automatico detersivo"
+      },
+      "auto_softener": {
+        "name": "Dosaggio automatico ammorbidente"
       },
       "child_lock": {
         "name": "Blocco Comandi"

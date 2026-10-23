@@ -1,7 +1,7 @@
 # Appliance support status
 
 Coverage status per hOn appliance type in this integration.
-Last updated: **2026-08-24**.
+Last updated: **2026-10-23**.
 
 Legend:
 - ✅ = implemented and active
@@ -71,6 +71,9 @@ for them in a device schema yet. All their entities are capability-gated and
 | Coffee machine / kettle | `KT` | instantaneous power, descaling counter, lifetime cycles | — |
 | Water heater | `WH` | water / inlet / outlet temperature, power, available water volume, time-to-target, phase | indicator light, child lock |
 | Robot vacuum | `RVC` | battery, state, remaining time, suction power, last/total cleaned area, errors | — |
+| Laundry Centre (washer + dryer under one MAC) | `LC` | per unit (washer `WM`, dryer `TD`): state, phase, remaining time, programme, errors; washer water, cycles and dosing (detergent level, detergent / softener weight); dryer anti-crease time; appliance energy | per unit: remote control, pause; washer door / door-lock, dosing (auto detergent / softener) |
+
+Laundry Centre (`LC`): controls exist in the device schema but are withheld until a later stage; validated on one user dump only.
 
 ## Not yet supported (❌)
 
